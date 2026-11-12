@@ -74,6 +74,55 @@
           </table>
         </div>
       </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">{{ t('orders.submittedOrders') }} ({{ submittedOrders.length }})</h3>
+        </div>
+        <div v-if="submittedLoading" class="loading">{{ t('common.loading') }}</div>
+        <div v-else-if="submittedError" class="error">{{ submittedError }}</div>
+        <div v-else class="table-container">
+          <table class="orders-table">
+            <thead>
+              <tr>
+                <th class="col-order-number">{{ t('orders.table.orderNumber') }}</th>
+                <th class="col-date">{{ t('orders.submittedDate') }}</th>
+                <th class="col-items">{{ t('orders.table.items') }}</th>
+                <th class="col-value">{{ t('orders.table.totalValue') }}</th>
+                <th class="col-status">{{ t('orders.table.status') }}</th>
+                <th class="col-date">{{ t('orders.leadTime') }}</th>
+                <th class="col-date">{{ t('orders.table.expectedDelivery') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="submittedOrders.length === 0">
+                <td colspan="7" class="empty-row">{{ t('orders.noSubmittedOrders') }}</td>
+              </tr>
+              <tr v-for="order in submittedOrders" :key="order.id">
+                <td class="col-order-number"><strong>{{ order.order_number }}</strong></td>
+                <td class="col-date">{{ formatDate(order.created_date) }}</td>
+                <td class="col-items">
+                  <details class="items-details">
+                    <summary class="items-summary">
+                      {{ t('orders.itemsCount', { count: order.items.length }) }}
+                    </summary>
+                    <div class="items-dropdown">
+                      <div v-for="item in order.items" :key="item.sku" class="item-entry">
+                        <span class="item-name">{{ translateProductName(item.name) }}</span>
+                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ formatMoney(item.unit_cost, 2) }}</span>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td class="col-value"><strong>{{ formatMoney(order.total_cost) }}</strong></td>
+                <td class="col-status"><span class="badge info">{{ t('status.submitted') }}</span></td>
+                <td class="col-date">{{ t('orders.leadTimeDays', { days: order.lead_time_days }) }}</td>
+                <td class="col-date">{{ formatDateOnly(order.expected_delivery) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -83,6 +132,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
+import { formatCurrency, formatCurrencyWithDecimals } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -153,7 +203,48 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    // Submitted restock orders: separate state so a failure here never affects the main orders view
+    const submittedOrders = ref([])
+    const submittedLoading = ref(true)
+    const submittedError = ref(null)
+
+    const loadSubmittedOrders = async () => {
+      try {
+        submittedLoading.value = true
+        submittedError.value = null
+        submittedOrders.value = await api.getRestockOrders()
+      } catch (err) {
+        submittedError.value = 'Failed to load submitted orders: ' + err.message
+      } finally {
+        submittedLoading.value = false
+      }
+    }
+
+    const formatMoney = (amount, decimals = 0) => {
+      return decimals > 0
+        ? formatCurrencyWithDecimals(amount, currentCurrency.value, decimals)
+        : formatCurrency(amount, currentCurrency.value)
+    }
+
+    // expected_delivery is a date-only string (YYYY-MM-DD). new Date(str) would parse it
+    // as UTC midnight, which shows as the previous day in timezones behind UTC,
+    // so build a local date from its parts instead.
+    const formatDateOnly = (dateString) => {
+      const [y, m, d] = String(dateString).split('-').map(Number)
+      const date = new Date(y, m - 1, d)
+      if (isNaN(date.getTime())) return dateString
+      const { currentLocale } = useI18n()
+      return date.toLocaleDateString(currentLocale.value === 'ja' ? 'ja-JP' : 'en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      })
+    }
+
+    onMounted(() => {
+      loadOrders()
+      loadSubmittedOrders()
+    })
 
     return {
       t,
@@ -163,6 +254,11 @@ export default {
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      formatDateOnly,
+      formatMoney,
+      submittedOrders,
+      submittedLoading,
+      submittedError,
       currencySymbol,
       translateProductName,
       translateCustomerName
@@ -274,6 +370,11 @@ export default {
 
 .item-meta {
   font-size: 0.813rem;
+  color: #64748b;
+}
+
+.empty-row {
+  text-align: center;
   color: #64748b;
 }
 </style>
